@@ -124,13 +124,30 @@ The JIT cache lives in `~/.cache/torch_extensions/py<minor>-cu<cuda>/`; delete i
 to force a full rebuild. The first import compiles, so it must run on a machine
 with `nvcc` available.
 
+### A shadowed install falls back to JIT, silently
+
+If a gsplat source checkout appears earlier on `sys.path` than the installed
+package, `import gsplat` finds that tree instead. When its `csrc.so` was built
+against a different torch (an editable install of another checkout, a `PYTHONPATH`
+entry, or simply running a script from inside the repository), the extension
+fails to load and gsplat **falls back to the JIT path without any error**. The
+symptom is a run that appears to hang for tens of minutes before the first step.
+
+Print the origin before timing anything:
+
+```python
+import gsplat
+print(gsplat.__file__)          # must point at site-packages (or the intended tree)
+```
+
 ## Verify the install
 
 ```bash
 python - <<PY
 import torch, gsplat
 from gsplat.cuda._backend import _C
-print("gsplat", gsplat.__version__, "ext loaded:", _C is not None)
+print("gsplat", gsplat.__version__, "at", gsplat.__file__)
+print("ext loaded:", _C is not None)
 print("device:", torch.cuda.get_device_name(0), torch.cuda.get_device_capability(0))
 q = torch.tensor([[0.0, 0.0, 0.0, 1.0]], device="cuda")
 s = torch.ones(1, 3, device="cuda")
@@ -231,3 +248,9 @@ Sizing lessons that matter more than they look:
   (commonly 10 min) kill `nvcc` mid-file.
 - keep `build/` between attempts. `setup.py build_ext --inplace` resumes;
   a pip/uv build in an isolated temp dir restarts from zero.
+- **fetching and compiling happen in different places.** Compute nodes are often
+  cut off from the internet, so a `pip`/`uv` install of the *wheel* (pure
+  download, no `nvcc`) belongs on a login node, while a *source* install needs a
+  compute node for the compiler and therefore a network path that works there.
+  If it does not, prefetch the wheels on the login node and let the job install
+  from the local cache (`uv pip install --offline`, `--find-links`).
